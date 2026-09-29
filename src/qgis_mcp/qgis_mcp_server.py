@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 import socket
 import json
+import struct
 from typing import AsyncIterator, Dict, Any
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -49,24 +50,27 @@ class QgisMCPServer:
         }
         
         try:
-            # Send the command
-            self.socket.sendall(json.dumps(command).encode('utf-8'))
-            
-            # Receive the response
-            response_data = b''
-            while True:
-                chunk = self.socket.recv(4096)
+            # Send the command (length-prefix პროტოკოლი)
+            msg = json.dumps(command).encode("utf-8")
+            self.socket.sendall(struct.pack(">I", len(msg)) + msg)
+
+            # პასუხის მიღება - 4-byte header
+            raw_header = b""
+            while len(raw_header) < 4:
+                chunk = self.socket.recv(4 - len(raw_header))
                 if not chunk:
-                    break
+                    return None
+                raw_header += chunk
+            msg_len = struct.unpack(">I", raw_header)[0]
+
+            # სრული პასუხი
+            response_data = b""
+            while len(response_data) < msg_len:
+                chunk = self.socket.recv(min(65536, msg_len - len(response_data)))
+                if not chunk:
+                    return None
                 response_data += chunk
-                
-                # Try to decode as JSON to see if it's complete
-                try:
-                    json.loads(response_data.decode('utf-8'))
-                    break  # Valid JSON, we have the full message
-                except json.JSONDecodeError:
-                    continue  # Keep receiving
-            
+
             # Parse and return the response
             return json.loads(response_data.decode('utf-8'))
             
